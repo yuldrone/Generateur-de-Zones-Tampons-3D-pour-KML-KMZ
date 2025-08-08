@@ -121,13 +121,21 @@ def write_kml_with_folders(src_polys, bufs_data, out_file, merge=True):
         poly.style.linestyle.color = simplekml.Color.white # Contour blanc
         poly.style.linestyle.width = 2 # Largeur 2 pixels
 
-    def create_poly(parent, ring, name, color):
-        poly = parent.newpolygon(name=name); poly.outerboundaryis = ring
-        poly.altitudemode = simplekml.AltitudeMode.relativetoground
-        # Style des polygones de tampon
-        poly.style.polystyle.color = simplekml.Color.changealphaint(120, color) # Remplissage coloré semi-transparent (120/255)
-        poly.style.linestyle.color = color # Contour de la même couleur
-        poly.style.linestyle.width = 2 # Largeur 2 pixels
+def create_poly(parent, ring, name, color):
+    poly = parent.newpolygon(name=name)
+    poly.outerboundaryis = ring
+    poly.altitudemode = simplekml.AltitudeMode.relativetoground
+    
+    # --- Définition du style, version corrigée et explicite ---
+    
+    # 1. Style de la zone (remplissage)
+    poly.style.polystyle.color = simplekml.Color.changealphaint(120, color) # Remplissage semi-transparent (alpha 120/255)
+    poly.style.polystyle.fill = 1  # 1 = Vrai. Assure que le remplissage est ACTIVÉ.
+    
+    # 2. Style du contour
+    poly.style.linestyle.color = color  # Contour de la même couleur, mais opaque
+    poly.style.linestyle.width = 2      # Largeur de 2 pixels
+    poly.style.polystyle.outline = 1 # 1 = Vrai. Assure que le contour est DESSINÉ.
 
     for u_input, (data, color) in bufs_data.items():
         buf_f = doc.newfolder(name=f"Zone Tampon {u_input}")
