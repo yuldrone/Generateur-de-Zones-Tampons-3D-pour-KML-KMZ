@@ -12,7 +12,7 @@ from processing_logic import (
 st.set_page_config(page_title="Générateur de Tampons 3D KML", page_icon="🌐", layout="wide")
 
 st.title("🌐 Générateur de Zones Tampons 3D pour polygones de missions SATP sur Google Earth Pro")
-st.write("Créé avec amour par <a href='https://www.YulDrone.ca'>YulDrone.ca</a>' .")
+st.write("Créé avec amour par YulDrone.ca")
 col1, col2 = st.columns(2)
 with col1:
     st.header("1. Uploader votre fichier")
