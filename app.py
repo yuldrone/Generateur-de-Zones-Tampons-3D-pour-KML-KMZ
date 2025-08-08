@@ -3,8 +3,7 @@ import streamlit as st
 import os
 import tempfile
 
-# Cette ligne essaie d'importer depuis 'processing_logic.py'.
-# Ce fichier DOIT être présent dans le même dossier.
+# Importer les fonctions de votre script de logique
 from processing_logic import (
     parse_buffer_size,
     process_kml_file
