@@ -1,5 +1,5 @@
 # processing_logic.py
-import sys, os, re, numpy as np, simplekml, zipfile, math
+import sys, os, re, numpy as np, simplekml, zipfile, math, colorsys # NOUVEL IMPORT
 from shapely.geometry import Polygon, MultiPolygon
 from shapely.ops import transform, unary_union
 from pyproj import Transformer
@@ -16,10 +16,34 @@ def compute_mean_latitude(coords):
     lats = [lat for poly in coords for _, lat in poly]
     return sum(lats) / len(lats) if lats else 0
 
-def calculate_color(dist_km, max_dist):
-    norm = 0.5 if max_dist == 0 else dist_km / max_dist
-    r,g,b = int(255*(1-norm)), 0, int(255*norm)
-    return f"ff{b:02x}{g:02x}{r:02x}"
+# --- MODIFICATION : Ancienne fonction 'calculate_color' supprimée ---
+# --- NOUVELLE FONCTION DE COULEUR ---
+def get_buffer_color_by_index(index):
+    """
+    Retourne une couleur spécifique en fonction de l'index de la zone tampon.
+    Suit la séquence demandée, puis génère des couleurs distinctes.
+    """
+    # Séquence de couleurs prédéfinies
+    predefined_colors = [
+        simplekml.Color.lightgreen,
+        simplekml.Color.cyan,
+        simplekml.Color.yellow,
+        simplekml.Color.orange,
+        simplekml.Color.red,
+        simplekml.Color.blue,
+        simplekml.Color.firebrick  # Un rouge brique pour "rouge foncé"
+    ]
+    
+    if index < len(predefined_colors):
+        return predefined_colors[index]
+    else:
+        # Pour les couleurs suivantes, on génère des couleurs vives et distinctes
+        # en utilisant l'espace colorimétrique HSV (Teinte, Saturation, Valeur)
+        # C'est mieux qu'un simple aléatoire car ça évite les couleurs ternes ou similaires.
+        hue = (0.6 + (index - len(predefined_colors)) * 0.61803398875) % 1.0
+        rgb = colorsys.hsv_to_rgb(hue, 0.9, 0.95) # Saturation et luminosité élevées
+        # Conversion du format RGB (0-1) au format KML (0-255)
+        return simplekml.Color.rgb(int(rgb[0]*255), int(rgb[1]*255), int(rgb[2]*255))
 
 def read_kml_polygons(path):
     content = None
@@ -85,19 +109,25 @@ def generate_precise_3d_buffers_for_polygons(polys, dist_km, num_alts=10, max_al
             results.append((poly, rings))
         return results
 
+# --- MODIFICATION : Mise à jour des styles dans cette fonction ---
 def write_kml_with_folders(src_polys, bufs_data, out_file, merge=True):
     kml = simplekml.Kml()
     doc = kml.newdocument(name=os.path.splitext(os.path.basename(out_file))[0])
     src_f = doc.newfolder(name="Polygones Sources")
     for i, p in enumerate(p for p in src_polys if p.is_valid and not p.is_empty):
         poly = src_f.newpolygon(name=f"Source {i+1}"); poly.outerboundaryis = list(p.exterior.coords)
-        poly.style.polystyle.color = simplekml.Color.changealphaint(100, simplekml.Color.grey)
+        # Style du polygone original
+        poly.style.polystyle.color = simplekml.Color.changealphaint(80, simplekml.Color.white) # Remplissage blanc très transparent
+        poly.style.linestyle.color = simplekml.Color.white # Contour blanc
+        poly.style.linestyle.width = 2 # Largeur 2 pixels
 
     def create_poly(parent, ring, name, color):
         poly = parent.newpolygon(name=name); poly.outerboundaryis = ring
         poly.altitudemode = simplekml.AltitudeMode.relativetoground
-        poly.style.polystyle.color = simplekml.Color.changealphaint(120, color)
-        poly.style.linestyle.color = color; poly.style.linestyle.width = 2
+        # Style des polygones de tampon
+        poly.style.polystyle.color = simplekml.Color.changealphaint(120, color) # Remplissage coloré semi-transparent (120/255)
+        poly.style.linestyle.color = color # Contour de la même couleur
+        poly.style.linestyle.width = 2 # Largeur 2 pixels
 
     for u_input, (data, color) in bufs_data.items():
         buf_f = doc.newfolder(name=f"Zone Tampon {u_input}")
@@ -121,7 +151,7 @@ def write_kml_with_folders(src_polys, bufs_data, out_file, merge=True):
     kml.save(out_file)
     print(f"KML sauvegardé : {out_file}")
 
-# --- C'EST LA LIGNE IMPORTANTE ---
+# --- MODIFICATION : Utilise la nouvelle fonction de couleur ---
 def process_kml_file(input_kml_path, buffer_sizes_km, user_inputs, num_altitudes, max_altitude_m=float('inf'), merge_buffers=True):
     print(f"Traitement: {input_kml_path}")
     source_polygons = read_kml_polygons(input_kml_path)
@@ -133,9 +163,13 @@ def process_kml_file(input_kml_path, buffer_sizes_km, user_inputs, num_altitudes
     output_file = os.path.join(output_folder, f"{base_name}_zones_tampons_3d.kml")
     
     buffers_data = {}
-    max_dist = max(buffer_sizes_km) if buffer_sizes_km else 1
-    for r_km, u_input in zip(buffer_sizes_km, user_inputs):
+    
+    # On itère avec un index pour pouvoir choisir la bonne couleur
+    for index, (r_km, u_input) in enumerate(zip(buffer_sizes_km, user_inputs)):
+        # On utilise la nouvelle fonction de couleur basée sur l'index
+        color = get_buffer_color_by_index(index)
+        
         data = generate_precise_3d_buffers_for_polygons(valid_source_polygons, r_km, num_altitudes, max_altitude_m, merge_buffers)
-        buffers_data[u_input] = (data, calculate_color(r_km, max_dist))
+        buffers_data[u_input] = (data, color)
     
     write_kml_with_folders(valid_source_polygons, buffers_data, output_file, merge_buffers)
