@@ -109,7 +109,7 @@ def write_kml_with_folders(src_polys, bufs_data, out_file, merge=True):
             def create_poly(parent, ring, name, color_val):
                 poly = parent.newpolygon(name=name); poly.outerboundaryis = ring
                 poly.altitudemode = simplekml.AltitudeMode.relativetoground
-                poly.style.polystyle.color = simplekml.Color.changealphaint(120, color_val)
+                poly.style.polystyle.color = simplekml.Color.changealphaint(0, color_val)
                 poly.style.polystyle.fill = 1
                 poly.style.linestyle.color = color_val
                 poly.style.linestyle.width = 2
