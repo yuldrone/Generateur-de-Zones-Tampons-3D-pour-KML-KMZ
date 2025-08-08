@@ -11,8 +11,8 @@ from processing_logic import (
 
 st.set_page_config(page_title="Générateur de Tampons 3D KML", page_icon="🌐", layout="wide")
 
-st.title("🌐 Générateur de Zones Tampons 3D pour KML/KMZ")
-st.write("Uploadez un fichier, définissez les paramètres et téléchargez le résultat.")
+st.title("🌐 Générateur de Zones Tampons 3D pour polygones de missions SATP sur Google Earth Pro")
+st.write("Uploadez un fichier KML ou KMZ représentant un polygone définissant votre zone de col, définissez les paramètres et téléchargez le résultat.")
 col1, col2 = st.columns(2)
 with col1:
     st.header("1. Uploader votre fichier")
