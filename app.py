@@ -94,4 +94,12 @@ if st.button("Lancer le diagnostic et la génération"):
                 st.info("Vérification de l'existence du fichier de sortie...")
                 if os.path.exists(output_file):
                     st.success("✅ FICHIER KML FINAL GÉNÉRÉ AVEC SUCCÈS !")
-                 
+                    with open(output_file, "r", encoding='utf-8') as f:
+                        kml_output_data = f.read()
+                    st.download_button("📥 Télécharger le fichier KML résultat", kml_output_data, output_file)
+                else:
+                    st.error("❌ ÉCHEC FINAL : Même après toutes les étapes, le fichier de sortie n'existe pas.")
+
+        except Exception as e:
+            st.error(f"UNE ERREUR CRITIQUE EST SURVENUE : {e}")
+            st.code(traceback.format_exc())
