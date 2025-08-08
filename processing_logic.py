@@ -1,168 +1,141 @@
 # processing_logic.py
-# -*- coding: utf-8 -*-
-
-import sys
-import os
-import re
-import numpy as np
+import sys, os, re, numpy as np, simplekml, zipfile, math
 from shapely.geometry import Polygon, MultiPolygon
 from shapely.ops import transform, unary_union
 from pyproj import Transformer
-import simplekml
 from xml.etree import ElementTree as ET
 from math import cos, radians, sqrt
-import glob
-import math
-import zipfile
 
-# --- Fonctions utilitaires ---
-def parse_buffer_size(buffer_size_str):
-    pattern = r"^\s*(\d+(\.\d+)?)\s*(m|ft|km|nm)\s*$"
-    match = re.match(pattern, buffer_size_str.lower())
-    if not match: raise ValueError(f"Format invalide: '{buffer_size_str}'.")
-    value_str, _, unit = match.groups()[:3]
-    value = float(value_str)
-    conv = {"m": 0.001, "ft": 0.0003048, "km": 1, "nm": 1.852}
-    return value * conv[unit]
+def parse_buffer_size(s):
+    m = re.match(r"^\s*(\d+(\.\d+)?)\s*(m|ft|km|nm)\s*$", s.lower())
+    if not m: raise ValueError(f"Format invalide: '{s}'.")
+    v, _, u = m.groups()[:3]; c = {"m": 0.001, "ft": 0.0003048, "km": 1, "nm": 1.852}
+    return float(v) * c[u]
 
-def compute_mean_latitude(polygon_coords_list):
-    all_latitudes = [lat for poly in polygon_coords_list for _, lat in poly]
-    if not all_latitudes: return 0
-    return sum(all_latitudes) / len(all_latitudes)
+def compute_mean_latitude(coords):
+    lats = [lat for poly in coords for _, lat in poly]
+    return sum(lats) / len(lats) if lats else 0
 
-def calculate_color(distance_km, max_distance):
-    norm = 0.5 if max_distance == 0 else distance_km / max_distance
-    r = int(255 * (1 - norm)); g = 0; b = int(255 * norm)
-    # Retourne la couleur au format KML (ABGR)
-    return f"ff{b:02x}{g:02x}{r:02x}" # Note: alpha 'ff' pour opaque, on le modifiera plus tard pour la transparence
+def calculate_color(dist_km, max_dist):
+    norm = 0.5 if max_dist == 0 else dist_km / max_dist
+    r,g,b = int(255*(1-norm)), 0, int(255*norm)
+    return f"ff{b:02x}{g:02x}{r:02x}"
 
-# --- Fonctions de lecture et de traitement ---
-def read_kml_polygons(file_path):
-    kml_content_str = None
+def read_kml_polygons(path):
+    content = None
     try:
-        if file_path.lower().endswith('.kmz'):
-            if not zipfile.is_zipfile(file_path): print(f"Erreur : {file_path} n'est pas un KMZ valide."); return []
-            with zipfile.ZipFile(file_path, 'r') as kmz:
-                kml_filename = next((f for f in kmz.namelist() if f.lower().endswith('.kml')), None)
-                if kml_filename:
-                    try: kml_content_str = kmz.read(kml_filename).decode('utf-8')
-                    except Exception: kml_content_str = kmz.read(kml_filename).decode('latin-1')
-                else: print(f"Erreur : Aucun .kml dans {file_path}"); return []
-        elif file_path.lower().endswith('.kml'):
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f: kml_content_str = f.read()
-            except UnicodeDecodeError:
-                 with open(file_path, 'r', encoding='latin-1') as f: kml_content_str = f.read()
-        else: print(f"Erreur : Type fichier non supporté : {file_path}."); return []
-    except Exception as e: print(f"Erreur lecture {file_path}: {e}"); return []
+        if path.lower().endswith('.kmz'):
+            with zipfile.ZipFile(path, 'r') as z:
+                kml_file = next((f for f in z.namelist() if f.lower().endswith('.kml')), None)
+                if kml_file: content = z.read(kml_file)
+        elif path.lower().endswith('.kml'):
+            with open(path, 'rb') as f: content = f.read()
+    except Exception as e: print(f"Erreur lecture {path}: {e}"); return []
+    if not content: return []
+    try: content_str = content.decode('utf-8')
+    except UnicodeDecodeError: content_str = content.decode('latin-1')
+    root = ET.fromstring(content_str)
+    ns = {'kml': root.tag.split('}')[0][1:] if '}' in root.tag else 'http://www.opengis.net/kml/2.2'}
+    paths = ['.//kml:Placemark//kml:Polygon/kml:outerBoundaryIs/kml:LinearRing/kml:coordinates']
+    polys = []
+    for p in paths:
+        for coords_tag in root.findall(p, ns):
+            if coords_tag.text:
+                pts = [(float(c.split(',')[0]), float(c.split(',')[1])) for c in coords_tag.text.strip().split() if len(c.split(',')) >= 2]
+                if len(pts) >= 3: polys.append(Polygon(pts))
+    return polys
 
-    if not kml_content_str: return []
-    try:
-        root = ET.fromstring(kml_content_str)
-        namespace_uri = root.tag.split('}')[0][1:] if '}' in root.tag else 'http://www.opengis.net/kml/2.2'
-        namespaces = {'kml': namespace_uri}
-    except Exception as e: print(f"Erreur parsing XML {file_path}: {e}"); return []
-
-    polygons_found = []
-    search_paths = [
-        './/kml:Placemark/kml:Polygon/kml:outerBoundaryIs/kml:LinearRing/kml:coordinates',
-        './/kml:Placemark/kml:MultiGeometry/kml:Polygon/kml:outerBoundaryIs/kml:LinearRing/kml:coordinates'
-    ]
-    processed_coords_texts = set()
-    for path in search_paths:
-        for coordinates_tag in root.findall(path, namespaces):
-            if coordinates_tag.text:
-                coords_text = coordinates_tag.text.strip()
-                if coords_text in processed_coords_texts: continue
-                processed_coords_texts.add(coords_text)
-                try:
-                    polygon_points = [(float(c.split(',')[0]), float(c.split(',')[1])) for c in coords_text.split() if len(c.split(',')) >= 2]
-                    if len(polygon_points) >= 3: polygons_found.append(Polygon(polygon_points))
-                except (ValueError, IndexError, TypeError): continue
-    return polygons_found
-
-def generate_precise_3d_buffers_for_polygons(shapely_polygons, distance_km, num_altitudes=10, max_altitude_m=float('inf'), merge_buffers=True):
-    if not shapely_polygons: return []
-    valid_polygons = [p for p in shapely_polygons if p.is_valid and not p.is_empty]
-    if not valid_polygons: return []
-
-    all_coords = [list(p.exterior.coords) for p in valid_polygons]
-    mean_latitude = compute_mean_latitude(all_coords)
-    correction_factor = 1 / cos(radians(mean_latitude)) if cos(radians(mean_latitude)) != 0 else 1
+def generate_precise_3d_buffers_for_polygons(polys, dist_km, num_alts=10, max_alt_m=float('inf'), merge=True):
+    valid_polys = [p for p in polys if p.is_valid and not p.is_empty]
+    if not valid_polys: return []
+    mean_lat = compute_mean_latitude([list(p.exterior.coords) for p in valid_polys])
+    corr = 1 / cos(radians(mean_lat)) if cos(radians(mean_lat)) != 0 else 1
+    trans_fwd = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True).transform
+    trans_back = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True).transform
+    buf_m = dist_km * corr * 1000
+    eff_max_alt = min(buf_m, max_alt_m)
+    alts = np.linspace(0, eff_max_alt, num_alts) if num_alts > 1 else [eff_max_alt]
     
-    transformer = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
-    reverse_transformer = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
-    
-    buffer_distance_m = distance_km * correction_factor * 1000
-    if buffer_distance_m < 0: buffer_distance_m = 0
-    effective_max_altitude_for_linspace = min(buffer_distance_m, max_altitude_m)
+    if merge:
+        all_rings = []
+        proj_polys = [transform(trans_fwd, p) for p in valid_polys]
+        for alt in alts:
+            h_dist = sqrt(max(0, buf_m**2 - alt**2))
+            buffers = [p.buffer(h_dist, resolution=16) for p in proj_polys]
+            merged = unary_union([b for b in buffers if b.is_valid and not b.is_empty])
+            geoms = list(merged.geoms) if isinstance(merged, MultiPolygon) else [merged]
+            for g in geoms:
+                if g.is_valid and not g.is_empty:
+                    g_geo = transform(trans_back, g)
+                    all_rings.append([(lon, lat, alt) for lon, lat in g_geo.exterior.coords])
+        return all_rings
+    else:
+        results = []
+        for poly in valid_polys:
+            rings = []
+            proj_poly = transform(trans_fwd, poly)
+            for alt in alts:
+                h_dist = sqrt(max(0, buf_m**2 - alt**2))
+                buffered = proj_poly.buffer(h_dist, resolution=16)
+                geoms = list(buffered.geoms) if isinstance(buffered, MultiPolygon) else [buffered]
+                for g in geoms:
+                    if g.is_valid and not g.is_empty:
+                        g_geo = transform(trans_back, g)
+                        rings.append([(lon, lat, alt) for lon, lat in g_geo.exterior.coords])
+            results.append((poly, rings))
+        return results
 
-    altitudes = np.linspace(0, effective_max_altitude_for_linspace, num_altitudes) if num_altitudes > 1 else [effective_max_altitude_for_linspace]
-
-    if merge_buffers:
-        all_rings_combined = []
-        projected_polygons = [transform(transformer.transform, p) for p in valid_polygons]
-        for alt in altitudes:
-            horizontal_distance_m = sqrt(max(0, buffer_distance_m**2 - alt**2))
-            buffers_at_this_alt_proj = [p.buffer(horizontal_distance_m, resolution=16) for p in projected_polygons]
-            valid_buffers = [b for b in buffers_at_this_alt_proj if b.is_valid and not b.is_empty]
-            if not valid_buffers: continue
-            
-            try: merged_geometry_proj = unary_union(valid_buffers)
-            except Exception: continue
-
-            geometries_to_transform = []
-            if isinstance(merged_geometry_proj, Polygon): geometries_to_transform.append(merged_geometry_proj)
-            elif isinstance(merged_geometry_proj, MultiPolygon): geometries_to_transform.extend(list(merged_geometry_proj.geoms))
-            
-            for geom_proj in geometries_to_transform:
-                try:
-                    geom_geo = transform(reverse_transformer.transform, geom_proj)
-                    if geom_geo.geom_type == 'Polygon':
-                        all_rings_combined.append([(lon, lat, alt) for lon, lat in geom_geo.exterior.coords])
-                except Exception: continue
-        return all_rings_combined
-    else: # No merge
-        results_by_poly = []
-        for poly in valid_polygons:
-            rings_for_this_poly = []
-            try:
-                proj_poly = transform(transformer.transform, poly)
-                for alt in altitudes:
-                    horizontal_distance_m = sqrt(max(0, buffer_distance_m**2 - alt**2))
-                    buffered = proj_poly.buffer(horizontal_distance_m, resolution=16)
-                    geoms_to_process = []
-                    if isinstance(buffered, Polygon): geoms_to_process.append(buffered)
-                    elif isinstance(buffered, MultiPolygon): geoms_to_process.extend(list(buffered.geoms))
-
-                    for geom_part in geoms_to_process:
-                         if geom_part.is_valid and not geom_part.is_empty:
-                             geom_geo = transform(reverse_transformer.transform, geom_part)
-                             rings_for_this_poly.append([(lon, lat, alt) for lon, lat in geom_geo.exterior.coords])
-            except Exception: continue
-            results_by_poly.append((poly, rings_for_this_poly))
-        return results_by_poly
-
-# --- Fonction d'écriture KML MODIFIÉE pour générer des polygones pleins ---
-def write_kml_with_folders(source_polygons, buffers_by_distance, output_file, merge_buffers=True):
+def write_kml_with_folders(src_polys, bufs_data, out_file, merge=True):
     kml = simplekml.Kml()
-    doc_name = os.path.splitext(os.path.basename(output_file))[0].replace('_zones_tampons_3d', '')
-    doc = kml.newdocument(name=doc_name)
+    doc = kml.newdocument(name=os.path.splitext(os.path.basename(out_file))[0])
+    src_f = doc.newfolder(name="Polygones Sources")
+    for i, p in enumerate(p for p in src_polys if p.is_valid and not p.is_empty):
+        poly = src_f.newpolygon(name=f"Source {i+1}"); poly.outerboundaryis = list(p.exterior.coords)
+        poly.style.polystyle.color = simplekml.Color.changealphaint(100, simplekml.Color.grey)
 
-    source_folder = doc.newfolder(name="Polygones Sources")
-    for idx, poly in enumerate(p for p in source_polygons if p.is_valid and not p.is_empty):
-        try:
-            kml_poly = source_folder.newpolygon(name=f"Source Polygon {idx+1}")
-            kml_poly.outerboundaryis = list(poly.exterior.coords)
-            kml_poly.style.polystyle.color = simplekml.Color.changealphaint(100, simplekml.Color.grey)
-            kml_poly.style.linestyle.width = 1
-        except Exception as e: print(f"Erreur écriture polygone source {idx+1}: {e}")
+    def create_poly(parent, ring, name, color):
+        poly = parent.newpolygon(name=name); poly.outerboundaryis = ring
+        poly.altitudemode = simplekml.AltitudeMode.relativetoground
+        poly.style.polystyle.color = simplekml.Color.changealphaint(120, color)
+        poly.style.linestyle.color = color; poly.style.linestyle.width = 2
 
-    for user_input, (data, color) in buffers_by_distance.items():
-        buffer_folder = doc.newfolder(name=f"Zone Tampon {user_input}")
+    for u_input, (data, color) in bufs_data.items():
+        buf_f = doc.newfolder(name=f"Zone Tampon {u_input}")
+        if merge:
+            rings_by_alt = {}
+            for ring in data:
+                if ring: rings_by_alt.setdefault(ring[0][2], []).append(ring)
+            for alt in sorted(rings_by_alt.keys()):
+                alt_f = buf_f.newfolder(name=f"Altitude {alt:.1f}m")
+                for i, ring in enumerate(rings_by_alt[alt]): create_poly(alt_f, ring, f"Zone {i+1}", color)
+        else:
+            for i, (src_poly, rings) in enumerate(data):
+                if not rings: continue
+                poly_f = buf_f.newfolder(name=f"Source Polygon {i+1}")
+                rings_by_alt = {}
+                for ring in rings:
+                    if ring: rings_by_alt.setdefault(ring[0][2], []).append(ring)
+                for alt in sorted(rings_by_alt.keys()):
+                    alt_f = poly_f.newfolder(name=f"Altitude {alt:.1f}m")
+                    for j, ring in enumerate(rings_by_alt[alt]): create_poly(alt_f, ring, f"Zone {j+1}", color)
+    kml.save(out_file)
+    print(f"KML sauvegardé : {out_file}")
 
-        def create_polygon_for_ring(parent, ring, name, color):
-            poly = parent.newpolygon(name=name)
-            poly.outerboundaryis = ring
-            poly.altitudemode = simplekml.AltitudeMode.relativetoground
-            poly.style.polystyle.color = simplekml.Color.changealphaint(120, color) # 120/255 = ~47% transp
+# --- C'EST LA LIGNE IMPORTANTE ---
+def process_kml_file(input_kml_path, buffer_sizes_km, user_inputs, num_altitudes, max_altitude_m=float('inf'), merge_buffers=True):
+    print(f"Traitement: {input_kml_path}")
+    source_polygons = read_kml_polygons(input_kml_path)
+    valid_source_polygons = [p for p in source_polygons if p.is_valid and not p.is_empty]
+    if not valid_source_polygons: print("Aucun polygone valide trouvé."); return
+    
+    output_folder = os.path.dirname(input_kml_path)
+    base_name = os.path.splitext(os.path.basename(input_kml_path))[0]
+    output_file = os.path.join(output_folder, f"{base_name}_zones_tampons_3d.kml")
+    
+    buffers_data = {}
+    max_dist = max(buffer_sizes_km) if buffer_sizes_km else 1
+    for r_km, u_input in zip(buffer_sizes_km, user_inputs):
+        data = generate_precise_3d_buffers_for_polygons(valid_source_polygons, r_km, num_altitudes, max_altitude_m, merge_buffers)
+        buffers_data[u_input] = (data, calculate_color(r_km, max_dist))
+    
+    write_kml_with_folders(valid_source_polygons, buffers_data, output_file, merge_buffers)
