@@ -18,7 +18,7 @@ with col1:
     st.header("1. Uploader votre fichier")
     uploaded_file = st.file_uploader("Choisissez un fichier KML ou KMZ contenant un ou plusieurs polygones créés sur Google Earth pro", type=['kml', 'kmz'])
 with col2:
-    st.header("2. Définir les paramètres")
+    st.header("2. Définir les distances tampons au polygone de mission")
     buffer_sizes_str = st.text_area("Tailles de tampon (une par ligne)", "12m\n132m\n1km\n3780m\n3900m\n2NM\n5NM", help="Exemples : 10m, 0.5km, 2nm")
     with st.expander("Paramètres avancés"):
         num_altitudes = st.slider("Nombre de niveaux d'altitude", 2, 50, 10)
