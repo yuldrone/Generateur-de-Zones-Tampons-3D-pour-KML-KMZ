@@ -2,12 +2,13 @@
 import streamlit as st
 import os
 import tempfile
-import uuid # Pour générer des noms de fichiers uniques
 
-# Importer les fonctions de votre script original
+# Importer les fonctions de votre script de logique
+# Assurez-vous que processing_logic.py est dans le même dossier
 from processing_logic import (
     parse_buffer_size,
-    process_kml_file
+    process_kml_file,
+    write_kml_with_folders # Importé pour être sûr qu'il est disponible, même si appelé par process_kml_file
 )
 
 # --- Configuration de la page Streamlit ---
@@ -21,7 +22,7 @@ st.set_page_config(
 st.title("🌐 Générateur de Zones Tampons 3D pour KML/KMZ")
 
 st.write("""
-Cette application génère des zones tampons 3D (demi-sphères) autour de polygones contenus dans un fichier KML ou KMZ.
+Cette application génère des zones tampons 3D (en forme de demi-sphères représentées par des polygones étagés) autour des polygones contenus dans un fichier KML ou KMZ.
 Uploadez un fichier, définissez les paramètres et téléchargez le résultat.
 """)
 
@@ -38,7 +39,7 @@ with col1:
 with col2:
     st.header("2. Définir les paramètres")
     
-    # Champ pour les tailles de tampon (plus simple pour l'utilisateur)
+    # Champ pour les tailles de tampon
     buffer_sizes_str = st.text_area(
         "Tailles de tampon (une par ligne)",
         "10m\n50m\n0.1km",
@@ -48,7 +49,7 @@ with col2:
     # Paramètres avancés dans un "expander"
     with st.expander("Paramètres avancés"):
         num_altitudes = st.slider(
-            "Nombre de niveaux d'altitude",
+            "Nombre de niveaux d'altitude (précision 3D)",
             min_value=2, max_value=50, value=10,
             help="Nombre de 'tranches' pour dessiner la demi-sphère. Plus le nombre est élevé, plus le rendu est lisse."
         )
@@ -92,33 +93,25 @@ if st.button("Générer le fichier KML des zones tampons"):
         else:
             with st.spinner('Traitement en cours... Veuillez patienter...'):
                 try:
-                    # --- Gestion des fichiers temporaires ---
-                    # Votre script est conçu pour lire/écrire sur le disque.
-                    # Nous créons un répertoire temporaire pour gérer cela.
+                    # Gérer les fichiers dans un répertoire temporaire
                     with tempfile.TemporaryDirectory() as temp_dir:
-                        # 1. Sauvegarder le fichier uploadé dans le répertoire temporaire
+                        # 1. Sauvegarder le fichier uploadé
                         input_path = os.path.join(temp_dir, uploaded_file.name)
                         with open(input_path, "wb") as f:
                             f.write(uploaded_file.getbuffer())
 
-                        # 2. Définir le chemin du fichier de sortie
-                        base_name = os.path.splitext(uploaded_file.name)[0]
-                        # Votre script ajoute déjà le suffixe, donc on utilise le même nom de base.
-                        # La fonction process_kml_file va créer le fichier à cet endroit.
-                        
-                        # 3. Parser l'altitude max
+                        # 2. Parser l'altitude max
                         max_altitude_m = float('inf')
                         if max_altitude_str.strip():
                             try:
                                 max_altitude_m = float(max_altitude_str)
                             except ValueError:
-                                st.warning("Altitude maximale invalide, ignorée.")
+                                st.warning("Altitude maximale invalide, elle sera ignorée.")
 
-                        # 4. Appeler votre fonction principale !
-                        # Note : on redirige la sortie console pour l'afficher dans l'app
+                        # 3. Appeler votre fonction de traitement principale
                         st.info(f"Fichier d'entrée : {uploaded_file.name}")
-                        st.info(f"Tailles de tampon : {', '.join(valid_inputs)}")
-                        st.info(f"Fusion : {'Activée' if merge_buffers else 'Désactivée'}")
+                        st.info(f"Tailles de tampon demandées : {', '.join(valid_inputs)}")
+                        st.info(f"Fusion des zones : {'Activée' if merge_buffers else 'Désactivée'}")
                         
                         process_kml_file(
                             input_kml_path=input_path,
@@ -129,18 +122,17 @@ if st.button("Générer le fichier KML des zones tampons"):
                             merge_buffers=merge_buffers
                         )
                         
-                        # 5. Préparer le fichier de sortie pour le téléchargement
+                        # 4. Préparer le fichier de sortie pour le téléchargement
+                        base_name = os.path.splitext(uploaded_file.name)[0]
                         output_filename = f"{base_name}_zones_tampons_3d.kml"
                         output_path = os.path.join(temp_dir, output_filename)
 
                         if os.path.exists(output_path):
                             st.success("✅ Traitement terminé avec succès !")
                             
-                            # Lire le contenu du fichier généré
                             with open(output_path, "r", encoding='utf-8') as f:
                                 kml_output_data = f.read()
 
-                            # Proposer le téléchargement
                             st.download_button(
                                 label="📥 Télécharger le fichier KML résultat",
                                 data=kml_output_data,
@@ -148,7 +140,7 @@ if st.button("Générer le fichier KML des zones tampons"):
                                 mime="application/vnd.google-earth.kml+xml"
                             )
                         else:
-                            st.error("❌ Une erreur est survenue. Le fichier de sortie n'a pas pu être généré.")
+                            st.error("❌ Une erreur est survenue. Le fichier de sortie n'a pas pu être généré. Vérifiez les logs si possible.")
 
                 except Exception as e:
                     st.error(f"Une erreur critique est survenue durant le traitement : {e}")
